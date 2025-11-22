@@ -3,7 +3,6 @@ package kvstorage
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,12 +71,9 @@ func (s *KVStorage) Validate() error {
 
 // Store stores a value at the given key.
 func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
-	// Encode value as base64 for storage
-	encodedValue := base64.StdEncoding.EncodeToString(value)
-
-	// Prepare request body
+	// Prepare request body - value is stored as plain string
 	reqBody := map[string]string{
-		"value": encodedValue,
+		"value": string(value),
 	}
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
@@ -86,13 +82,13 @@ func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
 
 	// Create request
 	url := fmt.Sprintf("%s/api/write/%s/%s", s.Endpoint, s.Namespace, key)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", s.APIKey)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.APIKey))
 
 	// Execute request
 	resp, err := s.client.Do(req)
@@ -113,12 +109,12 @@ func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
 func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
 	// Create request
 	url := fmt.Sprintf("%s/api/read/%s/%s", s.Endpoint, s.Namespace, key)
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("X-API-Key", s.APIKey)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.APIKey))
 
 	// Execute request
 	resp, err := s.client.Do(req)
@@ -136,7 +132,7 @@ func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("load request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
+	// Parse response - value is a plain string, not base64 encoded
 	var result struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
@@ -146,25 +142,19 @@ func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// Decode base64 value
-	decodedValue, err := base64.StdEncoding.DecodeString(result.Value)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode base64 value: %w", err)
-	}
-
-	return decodedValue, nil
+	return []byte(result.Value), nil
 }
 
 // Delete deletes the value at the given key.
 func (s *KVStorage) Delete(ctx context.Context, key string) error {
 	// Create request
 	url := fmt.Sprintf("%s/api/write/%s/%s", s.Endpoint, s.Namespace, key)
-	req, err := http.NewRequest("DELETE", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("X-API-Key", s.APIKey)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.APIKey))
 
 	// Execute request
 	resp, err := s.client.Do(req)
@@ -186,15 +176,15 @@ func (s *KVStorage) Delete(ctx context.Context, key string) error {
 }
 
 // listKeys returns all keys that have the given prefix.
-func (s *KVStorage) listKeys(prefix string, recursive bool) ([]string, error) {
+func (s *KVStorage) listKeys(ctx context.Context, prefix string, recursive bool) ([]string, error) {
 	// Get all keys in the namespace
 	url := fmt.Sprintf("%s/api/read/%s", s.Endpoint, s.Namespace)
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("X-API-Key", s.APIKey)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.APIKey))
 
 	// Execute request
 	resp, err := s.client.Do(req)
@@ -270,7 +260,7 @@ func (s *KVStorage) Exists(ctx context.Context, key string) bool {
 
 // List returns all keys that have the given prefix.
 func (s *KVStorage) List(ctx context.Context, prefix string, recursive bool) ([]string, error) {
-	return s.listKeys(prefix, recursive)
+	return s.listKeys(ctx, prefix, recursive)
 }
 
 // Lock acquires a lock for the given key.
