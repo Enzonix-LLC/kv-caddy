@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/certmagic"
 	"go.uber.org/zap"
 )
@@ -65,6 +66,44 @@ func (s *KVStorage) Validate() error {
 	}
 	if s.APIKey == "" {
 		return fmt.Errorf("api_key is required")
+	}
+	return nil
+}
+
+// UnmarshalCaddyfile implements caddyfile.Unmarshaler. Syntax:
+//
+//	storage enzonix_kv {
+//	    endpoint <url>
+//	    namespace <namespace>
+//	    api_key <key>
+//	}
+func (s *KVStorage) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	for d.Next() {
+		if d.NextArg() {
+			// Skip the module name argument if present
+		}
+
+		for d.NextBlock(0) {
+			switch d.Val() {
+			case "endpoint":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				s.Endpoint = d.Val()
+			case "namespace":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				s.Namespace = d.Val()
+			case "api_key":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				s.APIKey = d.Val()
+			default:
+				return d.Errf("unrecognized subdirective: %s", d.Val())
+			}
+		}
 	}
 	return nil
 }
@@ -287,7 +326,8 @@ func (s *KVStorage) Unlock(ctx context.Context, key string) error {
 
 // Interface guards
 var (
-	_ certmagic.Storage = (*KVStorage)(nil)
-	_ caddy.Provisioner = (*KVStorage)(nil)
-	_ caddy.Validator   = (*KVStorage)(nil)
+	_ certmagic.Storage      = (*KVStorage)(nil)
+	_ caddy.Provisioner      = (*KVStorage)(nil)
+	_ caddy.Validator        = (*KVStorage)(nil)
+	_ caddyfile.Unmarshaler  = (*KVStorage)(nil)
 )
