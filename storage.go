@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -142,9 +143,9 @@ func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
 		return fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	// Create request
-	url := fmt.Sprintf("%s/api/write/%s/%s", s.Endpoint, s.Namespace, key)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	// Create request - URL encode namespace and key to handle special characters
+	urlStr := fmt.Sprintf("%s/api/write/%s/%s", s.Endpoint, url.PathEscape(s.Namespace), url.PathEscape(key))
+	req, err := http.NewRequestWithContext(ctx, "POST", urlStr, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -186,9 +187,9 @@ func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
 
 // Load retrieves a value for the given key.
 func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
-	// Create request
-	url := fmt.Sprintf("%s/api/read/%s/%s", s.Endpoint, s.Namespace, key)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// Create request - URL encode namespace and key to handle special characters
+	urlStr := fmt.Sprintf("%s/api/read/%s/%s", s.Endpoint, url.PathEscape(s.Namespace), url.PathEscape(key))
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -236,9 +237,9 @@ func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
 
 // Delete deletes the value at the given key.
 func (s *KVStorage) Delete(ctx context.Context, key string) error {
-	// Create request
-	url := fmt.Sprintf("%s/api/write/%s/%s", s.Endpoint, s.Namespace, key)
-	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	// Create request - URL encode namespace and key to handle special characters
+	urlStr := fmt.Sprintf("%s/api/write/%s/%s", s.Endpoint, url.PathEscape(s.Namespace), url.PathEscape(key))
+	req, err := http.NewRequestWithContext(ctx, "DELETE", urlStr, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -267,9 +268,9 @@ func (s *KVStorage) Delete(ctx context.Context, key string) error {
 
 // listKeys returns all keys that have the given prefix.
 func (s *KVStorage) listKeys(ctx context.Context, prefix string, recursive bool) ([]string, error) {
-	// Get all keys in the namespace
-	url := fmt.Sprintf("%s/api/read/%s", s.Endpoint, s.Namespace)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// Get all keys in the namespace - URL encode namespace to handle special characters
+	urlStr := fmt.Sprintf("%s/api/read/%s", s.Endpoint, url.PathEscape(s.Namespace))
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
