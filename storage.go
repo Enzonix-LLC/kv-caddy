@@ -70,6 +70,11 @@ func (s *KVStorage) Validate() error {
 	return nil
 }
 
+// CertMagicStorage implements caddy.StorageConverter.
+func (s *KVStorage) CertMagicStorage() (certmagic.Storage, error) {
+	return s, nil
+}
+
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler. Syntax:
 //
 //	storage enzonix_kv {
@@ -327,6 +332,7 @@ func (s *KVStorage) Unlock(ctx context.Context, key string) error {
 // Interface guards
 var (
 	_ certmagic.Storage      = (*KVStorage)(nil)
+	_ caddy.StorageConverter = (*KVStorage)(nil)
 	_ caddy.Provisioner      = (*KVStorage)(nil)
 	_ caddy.Validator        = (*KVStorage)(nil)
 	_ caddyfile.Unmarshaler  = (*KVStorage)(nil)
