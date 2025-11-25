@@ -3,6 +3,7 @@ package kvstorage
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -128,9 +129,13 @@ func (s *KVStorage) parseErrorResponse(body []byte) string {
 
 // Store stores a value at the given key.
 func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
-	// Prepare request body - value is stored as plain string
+	// Base64 encode the value to preserve binary data integrity
+	// This prevents JSON encoding from corrupting binary data by escaping special characters
+	encodedValue := base64.StdEncoding.EncodeToString(value)
+
+	// Prepare request body - value is stored as base64-encoded string
 	reqBody := map[string]string{
-		"value": string(value),
+		"value": encodedValue,
 	}
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
@@ -207,7 +212,7 @@ func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("load request failed with status %d: %s", resp.StatusCode, errorMsg)
 	}
 
-	// Parse response - value is a plain string, not base64 encoded
+	// Parse response - value is base64-encoded string
 	var result struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
@@ -217,7 +222,16 @@ func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return []byte(result.Value), nil
+	// Base64 decode the value to restore the original binary data
+	// Try base64 decoding first (for new values), fall back to plain text (for backward compatibility)
+	decodedValue, err := base64.StdEncoding.DecodeString(result.Value)
+	if err != nil {
+		// If base64 decoding fails, treat as plain text (backward compatibility with old values)
+		// This allows reading values that were stored before the base64 encoding fix
+		return []byte(result.Value), nil
+	}
+
+	return decodedValue, nil
 }
 
 // Delete deletes the value at the given key.
