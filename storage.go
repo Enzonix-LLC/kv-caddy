@@ -113,6 +113,19 @@ func (s *KVStorage) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
+// parseErrorResponse attempts to parse an error response from the API.
+// According to API.md, error responses follow the format: {"error": "error message"}
+func (s *KVStorage) parseErrorResponse(body []byte) string {
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+		return errResp.Error
+	}
+	// Fall back to raw body if not JSON or no error field
+	return string(body)
+}
+
 // Store stores a value at the given key.
 func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
 	// Prepare request body - value is stored as plain string
@@ -141,9 +154,26 @@ func (s *KVStorage) Store(ctx context.Context, key string, value []byte) error {
 	}
 	defer resp.Body.Close()
 
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("storage request failed with status %d: %s", resp.StatusCode, string(body))
+		errorMsg := s.parseErrorResponse(body)
+		return fmt.Errorf("storage request failed with status %d: %s", resp.StatusCode, errorMsg)
+	}
+
+	// Parse success response to validate (optional, but helps with debugging)
+	var result struct {
+		Status string `json:"status"`
+		Key    string `json:"key"`
+	}
+	if err := json.Unmarshal(body, &result); err == nil {
+		if result.Status != "ok" {
+			s.logger.Warn("unexpected response status", zap.String("status", result.Status), zap.String("key", key))
+		}
 	}
 
 	return nil
@@ -173,7 +203,8 @@ func (s *KVStorage) Load(ctx context.Context, key string) ([]byte, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("load request failed with status %d: %s", resp.StatusCode, string(body))
+		errorMsg := s.parseErrorResponse(body)
+		return nil, fmt.Errorf("load request failed with status %d: %s", resp.StatusCode, errorMsg)
 	}
 
 	// Parse response - value is a plain string, not base64 encoded
@@ -213,7 +244,8 @@ func (s *KVStorage) Delete(ctx context.Context, key string) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("delete request failed with status %d: %s", resp.StatusCode, string(body))
+		errorMsg := s.parseErrorResponse(body)
+		return fmt.Errorf("delete request failed with status %d: %s", resp.StatusCode, errorMsg)
 	}
 
 	return nil
@@ -239,7 +271,8 @@ func (s *KVStorage) listKeys(ctx context.Context, prefix string, recursive bool)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("list request failed with status %d: %s", resp.StatusCode, string(body))
+		errorMsg := s.parseErrorResponse(body)
+		return nil, fmt.Errorf("list request failed with status %d: %s", resp.StatusCode, errorMsg)
 	}
 
 	// Parse response
@@ -309,15 +342,46 @@ func (s *KVStorage) List(ctx context.Context, prefix string, recursive bool) ([]
 
 // Lock acquires a lock for the given key.
 func (s *KVStorage) Lock(ctx context.Context, key string) error {
-	// For a simple implementation, we can use a lock key pattern
-	// In a production system, you might want to implement proper distributed locking
 	lockKey := key + ".lock"
 	lockValue := fmt.Sprintf("%d", time.Now().UnixNano())
 
-	// Try to create the lock key (atomic operation)
-	err := s.Store(ctx, lockKey, []byte(lockValue))
+	// Check if lock already exists
+	existingLock, err := s.Load(ctx, lockKey)
+	if err == nil {
+		// Lock exists - check if it's stale (older than 5 minutes)
+		var lockTime int64
+		if _, parseErr := fmt.Sscanf(string(existingLock), "%d", &lockTime); parseErr == nil {
+			lockAge := time.Since(time.Unix(0, lockTime))
+			if lockAge < 5*time.Minute {
+				// Lock is still valid, cannot acquire
+				return fmt.Errorf("failed to acquire lock: lock already exists")
+			}
+			// Lock is stale, we can overwrite it
+			s.logger.Warn("overwriting stale lock", zap.String("key", lockKey), zap.Duration("age", lockAge))
+		} else {
+			// Can't parse lock value, assume it's valid
+			return fmt.Errorf("failed to acquire lock: lock already exists")
+		}
+	} else if err != os.ErrNotExist {
+		// Some other error occurred
+		return fmt.Errorf("failed to check lock existence: %w", err)
+	}
+	// Lock doesn't exist or is stale, try to create it
+
+	// Try to create the lock key
+	err = s.Store(ctx, lockKey, []byte(lockValue))
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
+	}
+
+	// Verify the lock was created with our value (defense against race conditions)
+	verifyLock, err := s.Load(ctx, lockKey)
+	if err != nil {
+		return fmt.Errorf("failed to verify lock: %w", err)
+	}
+	if string(verifyLock) != lockValue {
+		// Someone else created the lock between our check and create
+		return fmt.Errorf("failed to acquire lock: lock was acquired by another process")
 	}
 
 	return nil
